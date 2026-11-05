@@ -6,6 +6,7 @@
   "dependencies": [
     "nlohmann-json",
     "libjpeg-turbo",
-    "openssl"
+    "openssl",
+    "opus"
   ]
 }

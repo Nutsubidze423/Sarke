@@ -19,6 +19,8 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(libjpeg-turbo CONFIG REQUIRED)
 # TLS 1.3 for the channels between PCs (docs/SECURITY.md); linked statically like everything else.
 find_package(OpenSSL REQUIRED)
+# Opus for the shared app's sound (kvm/audio_codec.h, roadmap Phase 3).
+find_package(Opus CONFIG REQUIRED)
 
 # Module library: all <dir>/*.cpp except main.cpp, plus its include dir and link deps.
 # Falls back to an INTERFACE library while the directory has no sources besides main.cpp.

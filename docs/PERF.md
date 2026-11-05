@@ -313,3 +313,25 @@ Identical entries (one per graphics adapter, and a virtual display adds some) ar
 - **The whole-PC capture is 15.5 dB louder than the app's stream** (-13.7 against -29.2 dBFS): it is taken after this laptop's speaker effects. The per-process capture is the app's own signal, before them.
 - **No gaps:** no packet in any capture was flagged as a discontinuity.
 - **Still to check:** Windows 11, and apps that play from several processes (browsers) or set their own session volume.
+
+## Opus encode and decode (roadmap P3.2)
+
+**How it's measured:** `audio_codec_test` (unit), three runs; the results are deterministic.
+- **Signal:** 2 s of a music-like test signal (a chord over a bass note, 3 Hz tremolo), 48 kHz stereo.
+- **Encoder:** `kvm/audio_codec.h` defaults: 10 ms frames, `RESTRICTED_LOWDELAY`, 128 kbit/s, complexity 5, `loss_percent` 5.
+- **Losses:** every 10th packet from the 20th on is lost and concealed.
+
+| Date | Machine | Packet | Codec delay | SNR | After a lost packet: 1st / 2nd frame SNR | Encode / decode per 10 ms frame |
+|---|---|---|---|---|---|---|
+| 2026-11-05 | Celeron laptop | 161 bytes avg (129 kbit/s) | 120 samples (2.5 ms) | 23.7 dB | 12.1 / 22.8 dB (22.8 without losses) | 135–149 / 57–63 µs |
+
+**What it shows:**
+- **The codec adds 2.5 ms of delay** and about 1.5% of one core on this CPU to encode, 0.6% to decode.
+- **A concealed frame is at the right level** (-22.6 dB where -20.9 dB was lost). It continues the sound, but not the exact waveform: its SNR is about 0 dB, as expected.
+- **`loss_percent` matters after a loss:**
+  - at 0, the frames after a gap stay at 6.4–6.5 dB SNR and need ~8 frames (80 ms) to get back to normal. CELT predicts each frame's band energies from the previous one;
+  - at 5 (and the same at 10 and 20), the second frame is already back to normal, for 0.5 dB less SNR overall (23.7 against 24.2 dB).
+- **In-band FEC does nothing in this mode:**
+  - a lost frame recovered from the next packet's FEC scores the same as concealment, -0.2 dB;
+  - FEC is part of Opus's speech coder (SILK), and `RESTRICTED_LOWDELAY` uses only the music coder (CELT);
+  - in speech mode at 32 kbit/s the same measurement shows FEC working (1.1 against -0.7 dB), so it can see FEC where there is some.
