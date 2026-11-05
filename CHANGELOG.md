@@ -3,7 +3,10 @@
 What changed for people who use Sarke, newest first. The plan ahead is in
 [docs/ROADMAP.md](docs/ROADMAP.md); how releases are made is in [docs/RELEASING.md](docs/RELEASING.md).
 
-## Unreleased
+## 1.2.0 (release date: set when published)
+
+**Update both PCs:** 1.2 uses protocol 3 and can't connect to 1.1. Pair the two PCs once after
+updating.
 
 - **Pairing and encryption (protocol 3, not compatible with 1.1).**
   - PCs pair once by comparing a 6-digit code on both screens.

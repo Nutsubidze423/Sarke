@@ -21,11 +21,9 @@ Where it's going: *all your devices become one computer you can sit at from anyw
 laptop runs a heavy app or game on your desktop's GPU, with sound. The [roadmap](docs/ROADMAP.md)
 has the plan.
 
-> [!WARNING]
-> **Use Sarke only on networks you trust.** Version 1.1 has no pairing or encryption yet: any
-> device on the same local network can connect and control the PC, and what crosses the network
-> (keystrokes included) is readable. Pairing and TLS 1.3 encryption are the next milestone
-> ([Phase 1](docs/ROADMAP.md#phase-1--security), designed in [docs/SECURITY.md](docs/SECURITY.md)).
+> [!IMPORTANT]
+> **Updating from 1.1?** Update **both** PCs: 1.2 pairs and encrypts, so it can't talk to 1.1. Each
+> PC on 1.2 says so when the other one still runs 1.1. Then pair the two PCs once (step 3 below).
 
 ## Features
 
@@ -36,6 +34,7 @@ has the plan.
 | **Files** | Drag files across the edge and they land where you let go: a folder, the desktop or an app. Files copied with Ctrl+C paste on the other PC. |
 | **Clipboard** | Text and images copied on one PC paste on the other. |
 | **Finds the other PC** | No IP addresses to type: Sarke lists the PCs running it on the network, and can connect to one automatically next time. |
+| **Paired and encrypted** | Two PCs pair once by comparing a 6-digit code on both screens. After that only they can connect to each other, and everything between them (input, clipboard, windows, files) is encrypted with TLS 1.3. |
 | **Arranged once** | Set where the other PC stands on either PC; both follow. Each PC remembers where every PC it has met stands. |
 | **Window viewer** | Without a virtual display, any window can still be streamed into a viewer on the other PC and controlled from there. |
 
@@ -43,7 +42,9 @@ has the plan.
 
 **You need:**
 - Two PCs with Windows 10 (version 2004 or later) or Windows 11, 64-bit;
-- both on the same local network. Sarke uses TCP ports 50500–50502 and UDP port 50503.
+- both on the same local network, which Windows calls **Private** (Settings > Network & internet >
+  Wi-Fi or Ethernet > your network). On a Public network the other PC can't reach Sarke, and Sarke
+  tells you so. It uses TCP ports 50500–50502 and UDP port 50503.
 
 **Steps:**
 1. Download `SarkeSetup-<version>.exe` from the
@@ -51,11 +52,13 @@ has the plan.
    [website](https://sarke-nine.vercel.app)), and run it on **both** PCs. It installs:
    - Sarke;
    - the [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver) for desk mode;
-   - firewall rules for the local network.
+   - firewall rules that let in only the local network, and only on Private networks.
 2. Start Sarke on both PCs. It lives in the system tray and lists the other PCs running Sarke.
-3. On one PC, click the other PC in that list. Turn on **Auto** to connect to it by itself whenever
-   it's on the network.
-4. In the tray menu, choose **Display arrangement** and set which side of this screen the other PC
+3. On one PC, click the other PC in that list. The first time it shows **Pair…**: both PCs then
+   show a 6-digit code. Click **Pair** on both only if the codes are the same.
+4. Turn on **Auto** to connect to that PC by itself whenever it's on the network. **Paired PCs…** in
+   the tray menu lists the PCs this one is paired with, and can unpair them.
+5. In the tray menu, choose **Display arrangement** and set which side of this screen the other PC
    is on. Both PCs follow.
 
 Now move the mouse across that edge.
@@ -72,7 +75,8 @@ Now move the mouse across that edge.
 
 Settings live in `config.json`: in `%LOCALAPPDATA%\Sarke\` when installed, or in the repository
 for a build from source. Most can be changed from the tray menu. Logs are in
-`%LOCALAPPDATA%\Sarke\logs\`.
+`%LOCALAPPDATA%\Sarke\logs\`. The same folder keeps this PC's key (`identity.bin`, encrypted for
+your Windows account) and the PCs it is paired with (`paired.json`).
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -91,14 +95,20 @@ for a build from source. Most can be changed from the tray menu. Logs are in
 - **"Can't listen on port …".** The message names the program holding the port, or says Windows
   reserved it. Hyper-V, WSL and Docker reserve TCP port ranges; see them with
   `netsh interface ipv4 show excludedportrange protocol=tcp`. Set free ports in `control_port`,
-  `video_port` and `file_port`, the same on both PCs.
-- **The other PC isn't listed.** Both PCs must be on the same network. Guest and campus Wi-Fi
-  often block devices from reaching each other: try a phone hotspot, or
+  `video_port` and `file_port` on the PC that says so. The other PC follows the video and file
+  ports by itself; `control_port` has to match only when you connect with `--host <IP>`.
+- **The other PC isn't listed, or can't connect.** Both PCs must be on the same network, and
+  Windows must call it Private (Sarke tells you when it's Public). Guest and campus Wi-Fi often
+  block devices from reaching each other: try a phone hotspot (made Private), or
   `kvm_client.exe --host <IP>`.
+- **"Sarke versions don't match".** Install the same version on both PCs.
+- **The pairing codes differ.** Cancel on both PCs: something else answered. Pair again from the
+  list.
 - **Clicks don't reach a window.** Windows running as administrator only take input from Sarke
   when Sarke runs as administrator too.
 - **Microsoft Defender flags Sarke.** Builds aren't code-signed yet, and the input hooks look
-  suspicious to heuristics. The installer can add an exclusion; signing is planned.
+  suspicious to heuristics. The installer can add an exclusion (off by default: an exclusion also
+  stops Defender from scanning that folder); signing is planned.
 
 ## How it works
 
@@ -115,20 +125,24 @@ everything; the roles only decide who listens.
   - the other PC draws it in a transparent overlay at the same coordinates.
 - **Files:** a drag that reaches the other screen is caught, the files are sent, and the drag goes
   on from the cursor over there.
+- **Security:** each PC has its own key, made at first start. Pairing compares a code derived
+  from the TLS session on both screens, so a PC in the middle would show a different one. Every
+  connection is TLS 1.3 with both PCs' keys checked against the paired list before anything is read.
+  The design is in [docs/SECURITY.md](docs/SECURITY.md).
 
 | Port | Protocol | Carries |
 |---|---|---|
-| 50500 | TCP, length-prefixed JSON | handshake, arrangement, input, clipboard, window layout |
-| 50501 | TCP, JSON header + payload | window pictures (JPEG) |
-| 50502 | TCP, JSON header + payload | files |
-| 50503 | UDP broadcast | finding the other PCs |
+| 50500 | TCP, TLS 1.3, length-prefixed JSON | handshake, pairing, arrangement, input, clipboard, window layout |
+| 50501 | TCP, TLS 1.3, JSON header + payload | window pictures (JPEG) |
+| 50502 | TCP, TLS 1.3, JSON header + payload | files |
+| 50503 | UDP broadcast | finding the other PCs (not secret: it only says where to try) |
 
 Every message is described in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 ## Limitations
 
 - Windows only, local network only, one connection at a time.
-- Not encrypted yet (see the warning above).
+- Builds aren't code-signed yet.
 - Window pictures are JPEG, so fast video is less smooth than locally; sound stays on the PC that
   plays it. Hardware video and audio are Phases 2 and 3 of the roadmap.
 
