@@ -1358,10 +1358,16 @@ Attempts are rate-limited.
       - restoring the volume after a crash stays part of P3.6.
     - **Not checked:** Windows 11; an app that plays from several processes.
 
-- [ ] **P3.2 Opus codec wrapper** (S), branch `phase3/opus`.
+- [x] **P3.2 Opus codec wrapper** (S), branch `phase3/opus`.
   - **New dependency:** vcpkg `opus` (BSD-3-Clause). Why: low-latency, royalty-free, the standard choice.
-  - **Files:** `common/include/kvm/audio_codec.h` and `common/src/audio_codec.cpp`: 48 kHz stereo, 10 ms frames, `OPUS_APPLICATION_RESTRICTED_LOWDELAY`, in-band FEC on.
+  - **Files:** `common/include/kvm/audio_codec.h` and `common/src/audio_codec.cpp`: 48 kHz stereo, 10 ms frames, `OPUS_APPLICATION_RESTRICTED_LOWDELAY`, in-band FEC on (dropped: see the result).
   - **Tests:** unit: encode/decode round trip, SNR above a threshold, and packet-loss concealment exercised.
+  - **P3.2 result (2026-11-05):** [kvm/audio_codec.h](../common/include/kvm/audio_codec.h) (`AudioEncoder`, `AudioDecoder`), `audio_codec_test` (unit); numbers in [PERF.md](PERF.md).
+    - Opus 1.6.1 from vcpkg, linked privately into `kvm_common`, in THIRD_PARTY_NOTICES.md.
+    - **10 ms frames, `RESTRICTED_LOWDELAY`, 128 kbit/s:** 161-byte packets, 2.5 ms codec delay, 23.7 dB SNR on the test signal. On this Celeron a frame costs 0.14 ms to encode and 0.06 ms to decode.
+    - **No in-band FEC (a change from the plan):** FEC belongs to Opus's speech coder (SILK), and `RESTRICTED_LOWDELAY` uses only the music coder (CELT). Measured: a lost frame recovered by FEC scores the same as concealment, -0.2 dB. In speech mode, the same test sees FEC working.
+    - **`loss_percent` 5 instead:** it tells the encoder to lean less on the previous frame. After a lost packet the second frame is back to normal, where at 0 it takes ~8 frames. The cost is 0.5 dB SNR.
+    - **Concealment** fills a lost frame at the right level (within 2 dB).
 
 - [ ] **P3.3 Capture, encode and send on the owner** (M), branch `phase3/audio-send`.
   - **Files:** new `host_a/audio_capture.*`, which finds the PID from the shared window (`GetWindowThreadProcessId`) and includes its process tree.
@@ -1374,7 +1380,7 @@ Attempts are rate-limited.
     - WASAPI shared mode, event-driven;
     - an adaptive jitter buffer (grows on underrun, shrinks slowly);
     - drift correction (small resampling, or dropping/inserting samples);
-    - Opus PLC on loss.
+    - Opus PLC on loss (`AudioDecoder::conceal`).
   - **Tests:** an in-process synthetic stream with jitter and loss: underrun count and buffer latency stay within limits. Label `audio`, since it needs a render device.
 
 - [ ] **P3.5 A/V sync** (M), branch `phase3/av-sync`. Depends on P2.1.

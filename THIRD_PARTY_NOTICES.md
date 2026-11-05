@@ -10,6 +10,7 @@ ships the third-party components below, each under its own license.
 | [libspng](https://libspng.org) | 0.7.4 | BSD-2-Clause, libpng-2.0 | Compiled in through libjpeg-turbo |
 | [zlib](https://zlib.net) | 1.3.2 | Zlib | Compiled in through libspng |
 | [OpenSSL](https://www.openssl.org) | 3.6.5 | Apache-2.0 | Compiled in: TLS 1.3 between PCs (`kvm/tls.h`) |
+| [Opus](https://opus-codec.org) | 1.6.1 | BSD-3-Clause | Compiled in: the shared app's sound (`kvm/audio_codec.h`) |
 | [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver) | 11.30.4.434 | MIT | Driver shipped by the installer (desk mode) |
 | [Geist Mono](https://github.com/vercel/geist-font) | — | SIL OFL 1.1 | Font shipped in `assets/fonts` |
 | Google Sans | — | SIL OFL 1.1 | Font shipped in `assets/fonts` |
@@ -292,6 +293,55 @@ Copyright notice:
 
 Copyright The OpenSSL Project Authors. Licensed under the Apache License, Version 2.0: the same
 license text as Sarke's own [LICENSE](LICENSE) (OpenSSL's copy leaves out the appendix).
+
+## Opus
+
+```
+Copyright 2001-2023 Xiph.Org, Skype Limited, Octasic,
+                    Jean-Marc Valin, Timothy B. Terriberry,
+                    CSIRO, Gregory Maxwell, Mark Borgerding,
+                    Erik de Castro Lopo, Mozilla, Amazon
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+- Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+
+- Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+- Neither the name of Internet Society, IETF or IETF Trust, nor the
+names of specific contributors, may be used to endorse or promote
+products derived from this software without specific prior written
+permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Opus is subject to the royalty-free patent licenses which are
+specified at:
+
+Xiph.Org Foundation:
+https://datatracker.ietf.org/ipr/1524/
+
+Microsoft Corporation:
+https://datatracker.ietf.org/ipr/1914/
+
+Broadcom Corporation:
+https://datatracker.ietf.org/ipr/1526/
+```
 
 ## Virtual Display Driver
 
