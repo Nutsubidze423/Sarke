@@ -82,7 +82,7 @@ never hand-built JSON.
 
 | `type` | Direction | Fields |
 |---|---|---|
-| `hello` | client → host, then host → client (the answer) | `protocol_version`, `screen_w`, `screen_h`, `dpi_scale`, `hostname`, `desk` (desk mode on), `device_id` (64 hex, the sender's TLS key; for logs), `video_decode` and `video_encode` (the window-stream codecs the sender can show and send, e.g. `["h264","jpeg"]`; missing = an older Sarke, JPEG only). The host's answer adds `session_token`, `video_port`, `file_port` (side channels, above) |
+| `hello` | client → host, then host → client (the answer) | `protocol_version`, `screen_w`, `screen_h`, `dpi_scale`, `hostname`, `desk` (desk mode on), `device_id` (64 hex, the sender's TLS key; for logs), `video_decode` and `video_encode` (the window-stream codecs the sender can show and send, e.g. `["h264","h264-desk","jpeg"]`; `h264-desk` = desk mode as one H.264 picture, decode only; missing = an older Sarke, JPEG only). The host's answer adds `session_token`, `video_port`, `file_port` (side channels, above) |
 | `focus_enter` | controller → controlled | `y_norm` (where the cursor enters), `desk` (the cursor follows `desk_move`) |
 | `focus_leave` | both | `y_norm`. Controller → controlled: "I took input back". Controlled → controller: "your cursor came back over my edge" |
 | `mouse_move` | controller → controlled | `dx`, `dy` (relative) |
@@ -146,7 +146,8 @@ owner from the viewer's `hello`:
   gets JPEG.
 
 Desk mode follows the same rule with `h264-desk` in the viewer's `video_decode`: one H.264 stream of
-the whole VDD instead of a JPEG per window (roadmap P2.7). A viewer lists `h264-desk` only once it
-can draw that; until then desk mode stays JPEG.
+the whole VDD instead of a JPEG per window (roadmap P2.7). A viewer lists `h264-desk` when it can
+decode H.264 (since P2.7c); it cuts each window out of that picture at its `desk_layout` rect. A
+viewer that doesn't list it (an older Sarke) gets JPEG per window.
 
 Both programs log the decision and its reason when a session starts.

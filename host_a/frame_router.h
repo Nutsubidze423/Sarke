@@ -38,6 +38,7 @@ public:
         clock_offset_us_ = offset;
         has_clock_offset_ = true;
         window_.set_clock_offset_us(offset);
+        if (desk_) desk_->set_clock_offset_us(offset);
     }
     // The owner's window is coming as `codec` (proto::VideoConfig): get the decoder ready.
     void prepare(const std::string& codec) { window_.prepare(codec); }

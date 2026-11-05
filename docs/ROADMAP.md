@@ -1211,7 +1211,7 @@ Attempts are rate-limited.
     - `ctest --preset local` 41/41; `fuzz_protocol` with a `video_stats` seed, 1 minute: clean.
     - **Seen once:** right after a build, the encoder dropped 38 of 60 pictures in `h264_test`'s first part. The next runs passed; probably Windows Defender scanning the new executables.
 
-- [ ] **P2.7 Desk mode on H.264** (L → prototype first).
+- [x] **P2.7 Desk mode on H.264** (L → prototype first).
   - **Recommendation:** one H.264 stream of the **whole VDD monitor**, plus window rects, z-order and corner radius in `desk_layout`.
     - The viewer crops each window out of the one decoded texture with DirectComposition visuals (clip and rounded-rect geometry, premultiplied alpha).
     - Alpha comes from the geometry instead of sampled alpha runs; an RLE mask is sent only when a window's shape actually changes.
@@ -1261,6 +1261,27 @@ Attempts are rate-limited.
         - the first is a keyframe, `seq` has no gaps, and all 73 decode;
         - the layout has the window, corner radius 0 on this Windows 10 PC.
     - `ctest --preset local` 40/41. `remote_input_test` (vdd, untouched by this change) missed its Paint line once; 3 runs of it alone passed.
+  - **P2.7c result (2026-11-05):** the viewer side. Desk mode now goes as H.264 between two PCs that both have it.
+    - **[client_b/h264_stream.h](../client_b/h264_stream.h):** the H.264 receive loop moved out of `WindowStream` so the window viewer and desk mode share it. Every frame is decoded in order, and on a gap it waits for a keyframe and asks for one. It also sends `video_stats`.
+    - **[client_b/desk_compositor.h](../client_b/desk_compositor.h):** P2.7a's prototype as a class.
+      - One DirectComposition surface holds the decoded picture of the owner's whole VDD.
+      - Each window is a visual of that surface, clipped to its `desk_layout` rect with its `radius` (soft border).
+      - The window region is the windows' rects plus the resize rim, so clicks elsewhere reach the windows below.
+    - **`DeskView`** has a second overlay window (`WS_EX_NOREDIRECTIONBITMAP`) for H.264.
+      - An H.264 picture switches to it, and a JPEG picture switches back, so an older owner still works.
+      - Input, the cursor, z-order (`apply_z`) and the foreground rule are shared with the JPEG overlay.
+    - **Negotiation:** a viewer that can decode H.264 now lists `h264-desk`. Desk mode goes as H.264 when the owner has a hardware encoder and wasn't started with `--codec jpeg`. Both programs log it.
+    - **Tests:**
+      - `desk_test` (vdd): a `DeskView` draws the H.264 share, 65 pictures in ~2.5 s, on the DirectComposition window. Where Paint's half on the VDD should appear on this screen, the screen differs from Paint's own picture (`PrintWindow`) by 0.9 of 255 per channel on average. A screenshot shows it over VS Code's dark window, so it isn't a lucky match with a white background;
+      - `loopback_test`: the host's desk decision (H.264 with an encoder, else JPEG);
+      - `ctest --preset local` 41/41.
+    - **The real programs over loopback** (`baseline_loopback.ps1 -Mode desk -Codec h264`):
+      - the client logs "drawing the other PC's windows from one H.264 picture";
+      - 0 frames dropped for a document and scrolling, 9 in 30 s for the animation.
+      - Against JPEG in the same session ([PERF.md](PERF.md)): 29 fps at 44 and 62 ms p50 for a document and scrolling, against 22–25 fps at 78 and 99 ms. 4–9× less bandwidth. The animation is slower (108 against 76 ms p50): one UHD 600 draws, encodes and decodes for both sides.
+    - **Not checked here:**
+      - Windows 11's rounded corners (this PC has Windows 10: radius 0);
+      - two PCs (R11, R18).
 
 - [ ] **P2.8 Transport: TCP or UDP, decided by measurement** (M), branch `phase2/transport-eval`.
   - **Measure:** on Wi-Fi and a hotspot, with the HUD, the p50/p99 capture→display latency at the target bitrate over TCP.

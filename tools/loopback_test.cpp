@@ -337,6 +337,10 @@ int wmain(int argc, wchar_t** argv) {
             check(host.log_has("go as h264 (both PCs can)") ||
                       host.log_has("go as jpeg (no hardware H.264 encoder on this PC)"),
                   "the host picks from the client's hello: H.264 if it has an encoder, else JPEG");
+            // Desk mode the same way, from "h264-desk" in the client's hello (P2.7c).
+            check(host.log_has("desk mode as h264 (both PCs can)") ||
+                      host.log_has("desk mode as jpeg (no hardware H.264 encoder on this PC)"),
+                  "desk mode too: H.264 if the host has an encoder, else JPEG");
 
             kvm::log::info("5b) the host unpairs kvm_client");
             check(host.send_line("unpair " + kvm::tls::to_hex(*client_id)), "\"unpair <the client's ID>\" to the host");

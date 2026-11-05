@@ -12,13 +12,17 @@
 // drawn, that the overlay hides once the window is back, then puts the window back and detaches.
 // Then the same with H.264 (roadmap P2.7b), where this PC has a hardware encoder: one stream of the
 // whole VDD (layer "desk", window 0, the VDD's size), starting with a keyframe, seq without gaps,
-// every frame decodable, and the layout with the window's corner radius.
+// every frame decodable, and the layout with the window's corner radius. A DeskView draws that stream
+// (roadmap P2.7c: DirectComposition cuts the window out of the picture), and what the screen shows
+// there is compared with the window's own picture (PrintWindow).
 
 #include <windows.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <cstdlib>
 #include <format>
 #include <mutex>
 #include <optional>
@@ -35,6 +39,7 @@
 #include "kvm/desk_region.h"
 #include "kvm/dpi.h"
 #include "kvm/log.h"
+#include "kvm/video_stats.h"
 #include "virtual_display.h"
 #include "window_picker.h"
 
@@ -111,6 +116,64 @@ bool save_screen(const std::wstring& path) {
     DeleteDC(mem);
     ReleaseDC(nullptr, screen);
     return written;
+}
+
+// Top-down 32-bit pixels of a w x h bitmap that `draw(mem_dc, screen_dc)` paints; empty if it fails.
+template <class Draw>
+std::vector<std::uint32_t> grab(int w, int h, Draw draw) {
+    std::vector<std::uint32_t> out;
+    if (w <= 0 || h <= 0) return out;
+    HDC screen = GetDC(nullptr);
+    HDC mem = CreateCompatibleDC(screen);
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    void* bits = nullptr;
+    if (HBITMAP bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0)) {
+        const HGDIOBJ old = SelectObject(mem, bmp);
+        if (draw(mem, screen)) {
+            GdiFlush();
+            const auto* p = static_cast<const std::uint32_t*>(bits);
+            out.assign(p, p + static_cast<std::size_t>(w) * h);
+        }
+        SelectObject(mem, old);
+        DeleteObject(bmp);
+    }
+    DeleteDC(mem);
+    ReleaseDC(nullptr, screen);
+    return out;
+}
+
+// How far what the screen shows at `on_screen` is from `hwnd`'s own picture at `in_window` (window
+// coordinates, the same size): the mean difference per color channel, 0..255 (255 if a grab fails).
+double difference(HWND hwnd, const RECT& in_window, POINT on_screen) {
+    RECT wr{};
+    GetWindowRect(hwnd, &wr);
+    const int ww = wr.right - wr.left, wh = wr.bottom - wr.top;
+    const int w = in_window.right - in_window.left, h = in_window.bottom - in_window.top;
+    const auto own = grab(ww, wh, [&](HDC mem, HDC) { return PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT) != FALSE; });
+    const auto shown = grab(w, h, [&](HDC mem, HDC screen) {
+        return BitBlt(mem, 0, 0, w, h, screen, on_screen.x, on_screen.y, SRCCOPY | CAPTUREBLT) != FALSE;
+    });
+    if (own.empty() || shown.empty() || in_window.left < 0 || in_window.top < 0 || in_window.right > ww ||
+        in_window.bottom > wh) {
+        return 255;
+    }
+    std::uint64_t sum = 0;
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const std::uint32_t a = own[static_cast<std::size_t>(in_window.top + y) * ww + in_window.left + x];
+            const std::uint32_t b = shown[static_cast<std::size_t>(y) * w + x];
+            for (int c = 0; c < 24; c += 8) {
+                sum += static_cast<std::uint64_t>(
+                    std::abs(static_cast<int>((a >> c) & 255) - static_cast<int>((b >> c) & 255)));
+            }
+        }
+    }
+    return static_cast<double>(sum) / (3.0 * w * h);
 }
 
 // Position of `target` among top-level windows in z-order; 0 = topmost, -1 = not found.
@@ -322,10 +385,15 @@ int wmain(int argc, wchar_t** argv) {
             std::vector<kvm::proto::FrameHeader> headers;
             std::vector<std::vector<std::uint8_t>> units;
             kvm::proto::DeskLayout layout;
+            kvm::DeskView view;  // the other PC: draws the stream (outlives the share)
+            view.set_clock_offset_us(0);  // one clock
             auto capture = [&](const kvm::proto::FrameHeader& h, std::span<const std::uint8_t> payload) {
-                std::lock_guard lock(mutex);
-                headers.push_back(h);
-                units.emplace_back(payload.begin(), payload.end());
+                {
+                    std::lock_guard lock(mutex);
+                    headers.push_back(h);
+                    units.emplace_back(payload.begin(), payload.end());
+                }
+                view.present(kvm::net::Frame{.header = h, .payload = {payload.begin(), payload.end()}});
                 return true;
             };
             const HWND hwnd = window->hwnd;
@@ -335,8 +403,11 @@ int wmain(int argc, wchar_t** argv) {
             {
                 kvm::DeskShare share(*vdd_rect, region, capture,
                                      [&](const kvm::proto::DeskLayout& l) {
-                                         std::lock_guard lock(mutex);
-                                         layout = l;
+                                         {
+                                             std::lock_guard lock(mutex);
+                                             layout = l;
+                                         }
+                                         view.set_layout(l);
                                      },
                                      {.max_fps = 30, .codec = "h264"});
                 h264 = std::string_view(share.codec()) == "h264";
@@ -345,6 +416,32 @@ int wmain(int argc, wchar_t** argv) {
                     const int x = side == kvm::display::Side::Right ? vr.left - 400 : vr.right - 400;
                     SetWindowPos(hwnd, HWND_TOP, x, vr.top + 100, 800, 600, SWP_NOACTIVATE);
                     std::this_thread::sleep_for(2500ms);
+                    // The viewer side: the window, cut out of the picture, on this screen.
+                    check(wait_until([&] { return view.frames_shown() > 0; }, 3s),
+                          std::format("H.264 pictures are drawn ({})", view.frames_shown()));
+                    check(wait_until([&] { return IsWindowVisible(view.hwnd()) != FALSE; }, 2s),
+                          "the DirectComposition overlay is shown");
+                    check((GetWindowLongPtrW(view.hwnd(), GWL_EXSTYLE) & WS_EX_NOREDIRECTIONBITMAP) != 0,
+                          "it is the DirectComposition window");
+                    // The part of the window on the VDD, away from its edges, against what this screen
+                    // shows at the same place (the VDD's 0,0 is the primary monitor's).
+                    RECT wr{};
+                    GetWindowRect(hwnd, &wr);
+                    const RECT on_vdd{vr.left, vr.top, vr.right, vr.bottom};
+                    RECT part{};
+                    IntersectRect(&part, &wr, &on_vdd);
+                    InflateRect(&part, -40, -40);
+                    const RECT in_window{part.left - wr.left, part.top - wr.top, part.right - wr.left,
+                                         part.bottom - wr.top};
+                    const POINT on_screen{primary.rect.left + part.left - vr.left,
+                                          primary.rect.top + part.top - vr.top};
+                    const double diff = difference(hwnd, in_window, on_screen);
+                    check(diff < 12, std::format("this screen shows the window ({}x{} px, mean difference {:.1f})",
+                                                 part.right - part.left, part.bottom - part.top, diff));
+                    if (!shot.empty()) check(save_screen(shot + L".h264.bmp"), "H.264 screenshot saved");
+                    const auto s = kvm::video_stats().summary("desk");
+                    kvm::log::info("desk h264: {} frames shown, latency p50 {} ms", s.frames,
+                                   s.latency_p50_ms ? std::format("{:.1f}", *s.latency_p50_ms) : "-");
                 } else {
                     kvm::log::info("no hardware H.264 encoder here: the H.264 checks are skipped");
                 }

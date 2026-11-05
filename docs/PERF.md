@@ -158,6 +158,38 @@ and 6 Mbit/s through a fake channel. Each frame takes as long as it would on the
 
 **What it means:** the viewer's CPU stops being the limit in desk mode. What's left per picture is the H.264 decode and conversion (2–3 ms, P2.4a) and ~1 ms of composition calls.
 
+## Desk mode: JPEG and H.264 side by side (roadmap P2.7c)
+
+**How it's measured:** [tools/baseline_loopback.ps1](../tools/baseline_loopback.ps1) `-Mode desk -Codec jpeg|h264`.
+- **Setup:**
+  - the real kvm_host and kvm_client on 127.0.0.1, in desk mode;
+  - one 1280×800 window on the 1920×1080 virtual display for 30 s, a 30 fps cap;
+  - JPEG: one picture per window, quality 75 at 4:4:4, plus its alpha runs;
+  - H.264: one picture of the whole virtual display at 8 Mbit/s CBR, which the viewer cuts the window out of with DirectComposition.
+- **Columns:** as in the P2.1 table, from kvm_client's `--stats`. Decode includes the conversion to BGRA. Present is from decoded until `UpdateLayeredWindowIndirect` (JPEG) or `Commit` (H.264) returns.
+- **Runs:** one per codec and content, back to back in one session.
+- **Caveat:** as in the P2.4c table, one UHD 600 draws the content and both screens, and encodes and decodes.
+
+| Date | Machine | Content | Codec | fps | Mbit/s | Latency p50 / p95 / p99 (ms) | Decode avg / p95 (ms) | Present avg / p95 (ms) | Dropped |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-05 | Celeron laptop | static document (Notepad) | JPEG | 24.5 | 58.2 | 78 / 134 / 229 | 17.3 / 29.2 | 7.9 / 9.5 | 0 |
+| 2026-11-05 | Celeron laptop | static document (Notepad) | H.264 | 29.3 | 7.8 | 44 / 58 / 195 | 1.9 / 2.7 | 0.8 / 1.1 | 0 |
+| 2026-11-05 | Celeron laptop | browser scrolling (Edge) | JPEG | 22.4 | 74.4 | 99 / 143 / 178 | 23.4 / 37.8 | 10.1 / 13.7 | 0 |
+| 2026-11-05 | Celeron laptop | browser scrolling (Edge) | H.264 | 29.0 | 8.2 | 62 / 122 / 185 | 3.5 / 13.0 | 0.8 / 1.3 | 0 |
+| 2026-11-05 | Celeron laptop | animation, 40 moving boxes (Edge canvas) | JPEG | 28.2 | 28.1 | 76 / 104 / 124 | 16.9 / 24.1 | 10.1 / 12.7 | 0 |
+| 2026-11-05 | Celeron laptop | animation, 40 moving boxes (Edge canvas) | H.264 | 26.6 | 7.5 | 108 / 145 / 181 | 8.2 / 33.0 | 0.9 / 1.8 | 9 |
+
+**What it shows:**
+- **H.264 needs 4–9× less bandwidth:** 7.5–8.2 Mbit/s against 28–74 Mbit/s for JPEG.
+- **The viewer's work per picture drops from 25–34 ms to 3–9 ms:** decode 2–8 ms on the GPU instead of 17–23 ms on the CPU, and ~1 ms to show it instead of 8–10 ms of composing on the CPU.
+- **A document and scrolling are faster and smoother:**
+  - 29 fps at 44 and 62 ms p50, against 22–25 fps at 78 and 99 ms for JPEG.
+- **Animation is slower with H.264 on this one PC:** 108 ms p50 against 76 ms.
+  - The host logs 92 pictures "dropped by a busy encoder" in 30 s, and the decode p95 is 33 ms. The GPU is the limit again: it also draws the animation and both screens.
+  - With two PCs, the sender's GPU only captures and encodes. Measuring that is the regression checklist's R11 and R18.
+- **Compared with the window viewer's H.264 (P2.4c table):** the same animation there ran at 13.6 fps and 171 ms p50. Desk mode shows it at 26.6 fps.
+- **8 Mbit/s even for a still document:** the encoder runs at a constant bitrate. P2.6 lowers it only when the link can't keep up.
+
 ## BGRA to NV12 on the GPU (roadmap P2.3a)
 
 **What:** `nv12_test` (label `gpu`) converts a 1920×1080 BGRA texture to NV12 with the D3D11 video
