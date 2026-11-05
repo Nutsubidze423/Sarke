@@ -145,6 +145,19 @@ and 6 Mbit/s through a fake channel. Each frame takes as long as it would on the
 - **Up is slow on purpose:** ×1.15 per 500 ms after 1.5 s without a sign of a full link.
 - **Noise-like content** (every pixel new every frame) doesn't fit 1.5 Mbit/s even at the 1 Mbit/s minimum. There only skipping to a keyframe keeps the delay bounded: p95 1.1–1.6 s in earlier runs with such content.
 
+## Desk mode viewer: one picture, DirectComposition crops (roadmap P2.7a)
+
+**How it's measured:** [tools/dcomp_desk_prototype.cpp](../tools/dcomp_desk_prototype.cpp).
+- **Setup:** the VDD (1920×1080, 60 Hz) is captured whole on the GPU. Each picture is copied into a DirectComposition surface, and `Commit` shows it as clipped visuals (one per window on the VDD) on an overlay over the primary monitor.
+- **Content:** one or two Paint windows on the VDD.
+- **Time:** the viewer's CPU per picture, from 5 s windows over five runs.
+
+| Date | Machine | Pictures/s | Copy into the surface p50 / p95 (ms) | Commit p50 / p95 (ms) | Today's desk path, per picture (P2.1 table) |
+|---|---|---|---|---|---|
+| 2026-11-05 | Celeron laptop (UHD 600) | ~54 | 0.07–0.09 / under 0.8 | 0.8 / under 1.9 | 14–24 ms JPEG decode + 7.7–10 ms CPU compose |
+
+**What it means:** the viewer's CPU stops being the limit in desk mode. What's left per picture is the H.264 decode and conversion (2–3 ms, P2.4a) and ~1 ms of composition calls.
+
 ## BGRA to NV12 on the GPU (roadmap P2.3a)
 
 **What:** `nv12_test` (label `gpu`) converts a 1920×1080 BGRA texture to NV12 with the D3D11 video
