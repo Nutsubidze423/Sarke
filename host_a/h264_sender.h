@@ -77,9 +77,8 @@ public:
     std::uint64_t frames_sent() const { return sent_; }
     // Pictures not sent because they waited more than kSkipAfter (and the ones after them).
     std::uint64_t frames_skipped() const { return skipped_; }
-    // The bitrate the encoder runs at now, and the one BitrateControl wants.
+    // The bitrate the encoder runs at now (BitrateControl's wish is in the log).
     int bitrate() const { return bitrate_; }
-    int target_bitrate() const { return target_; }
 
 private:
     H264Sender() = default;

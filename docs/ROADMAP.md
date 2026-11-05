@@ -1290,9 +1290,18 @@ Attempts are rate-limited.
     2. DTLS/SRTP through libdatachannel (MPL-2.0), which Phase 6 may need anyway.
   - **Done when:** the decision and its numbers are in PERF.md. Staying on TCP for LAN in v1.0 is an acceptable result.
 
-- [ ] **P2.9 Clean-up** (S): remove the dead staging-copy code from the H.264 path. The README states only numbers from PERF.md.
+- [x] **P2.9 Clean-up** (S): remove the dead staging-copy code from the H.264 path. The README states only numbers from PERF.md.
+  - **P2.9 result (2026-11-05):** the plan was written before the GPU path existed; there was little to remove.
+    - **The staging copy stays.** `ScreenCapture::copy_to_cpu` is the JPEG path's, and JPEG stays as the fallback (P2.5). The H.264 path never used it: `start_gpu` copies on the GPU (`copy_on_gpu`).
+    - **Removed:** `H264Sender::target_bitrate()`, the one method in the H.264 code that nothing called. The wanted bitrate stays in the sender's log line.
+    - **The README** describes the released version (1.1 today, 1.2 with P1.14). Its video text changes with Phase 2's release docs, P2.11 below.
 
 - [ ] **P2.10 HEVC / AV1 / 4:4:4** (M, optional): only where P2.2 shows hardware support on both PCs **and** PERF.md shows a gain, such as sharper text at the same bitrate.
+
+- [ ] **P2.11 Release docs** (S), branch `phase2/release`, after P2.8's two-PC numbers. Added by P2.9, like P1.14 for Phase 1.
+  - The README's desk mode, ports and limitations text says H.264 when both PCs can, and JPEG otherwise.
+  - It states only numbers from PERF.md, measured on two PCs.
+  - CHANGELOG entry; version bump per [RELEASING.md](RELEASING.md).
 
 ### Phase 2 acceptance
 - **Automated:**
