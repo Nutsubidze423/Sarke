@@ -287,3 +287,29 @@ Identical entries (one per graphics adapter, and a virtual display adds some) ar
 - **4:4:4:** no encoder lists a 4:4:4 input (AYUV, Y410, Y416). ARGB32 input is converted to
   4:2:0 by the encoder, so P2.10's 4:4:4 isn't on this PC's table.
 - **Still to probe:** the two demo PCs.
+
+## Audio: one app's sound on Windows 10 (roadmap P3.1)
+
+**How it's measured:** [tools/audio_probe.cpp](../tools/audio_probe.cpp), three runs.
+- **Setup:** two copies of the probe play tones on the default speakers: "the app" at 440 Hz and "another app" at 660 Hz, each at -26 dBFS peak (-29.2 dBFS RMS).
+- **Captures** (2 s each, 48 kHz stereo, 32-bit float):
+  - per-process loopback of the app's process tree (`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`);
+  - the whole PC's output (endpoint loopback).
+- **Levels:** each tone's RMS level per 100 ms block (Goertzel), averaged.
+
+| Date | Machine | Windows | Per-process capture: the app / the other app (dBFS) | App's session muted: capture / PC's output | Session at -60 dB: capture (raised +60) / PC's output | Session at -100 dB: capture (raised +100) / PC's output | Gaps |
+|---|---|---|---|---|---|---|---|
+| 2026-11-05 | Celeron laptop | 10 22H2, 19045.3803 | -29.2 / -84 to -98 | silence (all samples 0) / -129 | -89.2 (-29.2) / -73.7 | -129.2 (-29.2) / -112.7 to -114.4 | 0 |
+
+**What it shows:**
+- **Per-process capture works on Windows 10 22H2.** Microsoft documents it from build 20348 on.
+  - It hears the app at its exact level. The other app's tone is at -84 to -98 dBFS there.
+  - That residue falls with the app's session volume (56–64 dB lower at -60 dB), so it is part of the app's own signal (its 16-bit samples), not the other app.
+- **Muting the app's session (the volume mixer's mute) also silences the capture:** every sample is 0. So P3.6 can't keep the owner silent with the mute.
+- **A very low session volume works instead:**
+  - at -100 dB the capture still has the app, 100 dB down. Raised by 100 dB in float it is back at -29.2 dBFS, and the whole signal at -29.1, so nothing else came up with it;
+  - the PC's own output has the app at -113 dBFS, below what 16-bit audio can carry (-96 dBFS);
+  - this needs a float capture: at 16 bits the app would be below the last bit.
+- **The whole-PC capture is 15.5 dB louder than the app's stream** (-13.7 against -29.2 dBFS): it is taken after this laptop's speaker effects. The per-process capture is the app's own signal, before them.
+- **No gaps:** no packet in any capture was flagged as a discontinuity.
+- **Still to check:** Windows 11, and apps that play from several processes (browsers) or set their own session volume.

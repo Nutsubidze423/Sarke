@@ -44,7 +44,7 @@ They are ordered by when they block work.
 | D5 | Releases | **GitHub Releases** is the source of truth, **and** every release is also uploaded to the website ([tools/publish_release.ps1](../tools/publish_release.ps1) stays). |
 | D6 | TLS library | **OpenSSL 3.** |
 | D7 | Pairing | **(a)** The same 6-digit code on both screens; confirm on both. |
-| D8 | Audio on Windows 10 | Open: decided after the P3.1 prototype. |
+| D8 | Audio on Windows 10 | **Per-app audio on Windows 10 22H2 and Windows 11.** P3.1 found per-process capture working on 19045. |
 | D9 | Controllers | Open: decided before Phase 5. |
 | D10 | Internet server cost | Open: decided before Phase 6. |
 
@@ -117,6 +117,8 @@ In git today:
 Microsoft documents per-process loopback capture for build 20348 and later. That is Windows 11 / Server 2022, not Windows 10 19041–19045, which this PC runs. If the prototype fails on Windows 10, choose one:
 - whole-PC audio on Windows 10 and per-app audio on Windows 11;
 - audio on Windows 11 only.
+
+**Decided by P3.1 (2026-11-05):** it doesn't fail. Per-process capture works on Windows 10 22H2 (19045.3803): it hears the app and not the other apps ([PERF.md](PERF.md)). So both Windows versions get per-app audio. Only 19045 was tried; if a PC's activation fails, P3.3 logs why.
 
 ### D9. Game controllers (before P5.3)
 ViGEmBus, the usual virtual-gamepad driver, was archived as end-of-life on 2023-11-02 and has no successor.
@@ -1329,11 +1331,11 @@ Attempts are rate-limited.
 
 **Goal:** the sound of the shared app plays on the viewer PC, in sync with the picture, while the owner PC stays silent.
 
-**Current state:** there is no audio code. Microsoft documents process-loopback capture (`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`) for build 20348 and later, and this PC is 19045 (D8).
+**Current state:** only the P3.1 probe. Microsoft documents process-loopback capture (`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`) for build 20348 and later; P3.1 found it working on this PC's 19045 too (D8).
 
 ### Tasks
 
-- [ ] **P3.1 Prototype: per-process loopback and muting** (S), branch `phase3/audio-probe`.
+- [x] **P3.1 Prototype: per-process loopback and muting** (S), branch `phase3/audio-probe`.
   - **Files:** new `tools/audio_probe.cpp`:
     - `ActivateAudioInterfaceAsync` with `PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE` on a given PID, writing a WAV;
     - fallback: whole-system loopback (`AUDCLNT_STREAMFLAGS_LOOPBACK`).
@@ -1341,6 +1343,20 @@ Attempts are rate-limited.
     1. Does it work on Windows 10 19045?
     2. **If we mute that app's session (`ISimpleAudioVolume`), is the loopback capture still audible?** If muting also silences the capture, P3.6 needs another approach.
   - **Done when:** both answers are in PERF.md and D8 is decided.
+  - **P3.1 result (2026-11-05):** [tools/audio_probe.cpp](../tools/audio_probe.cpp); numbers in [PERF.md](PERF.md).
+    1. **Yes, it works on Windows 10 22H2 (19045.3803).** It hears the app at its exact level, and not another app playing at the same time. D8 is decided: per-app audio on Windows 10 and 11.
+    2. **No: muting the app's session also silences the capture** (every sample 0). P3.6 needs another approach.
+    - **What works instead:** the app's session volume at -100 dB.
+      - The capture still has the app, 100 dB down; raised again in float it is back at its level, with nothing else raised with it.
+      - The PC's own output has it at -113 dBFS, below 16-bit audio's last bit.
+      - The capture must be float: at 16 bits, the app would be below the last bit.
+    - **For P3.3 and P3.6:**
+      - the gain is 1 / the session volume Sarke set, and it follows changes;
+      - an app that sets its own session volume (some players' volume sliders do) would change both the gain and how loud the owner PC plays;
+      - browsers play from a child process: every session in the app's process tree is lowered;
+      - the volume mixer shows the app's slider at 0 while it streams;
+      - restoring the volume after a crash stays part of P3.6.
+    - **Not checked:** Windows 11; an app that plays from several processes.
 
 - [ ] **P3.2 Opus codec wrapper** (S), branch `phase3/opus`.
   - **New dependency:** vcpkg `opus` (BSD-3-Clause). Why: low-latency, royalty-free, the standard choice.
@@ -1367,7 +1383,7 @@ Attempts are rate-limited.
   - **Done when:** a flash-and-beep test clip, filmed with a phone, gives the offset, and the number is written to PERF.md.
 
 - [ ] **P3.6 Owner silent while streaming** (S), branch `phase3/owner-mute`.
-  - The approach is chosen by the P3.1 result: the session mute, or another route.
+  - The approach is chosen by the P3.1 result: the session mute silences the capture too, so the app's session volume goes to -100 dB and the capture is raised by the same amount (float).
   - The previous state is restored on stop, **and after a crash** (state is persisted and restored at the next start).
 
 - [ ] **P3.7 Audio UI** (S): viewer mute and volume, an "Audio from <app>" indicator, and `"audio": true` in config.
