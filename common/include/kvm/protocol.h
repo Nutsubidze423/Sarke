@@ -201,6 +201,7 @@ struct DeskWindow {
     int y = 0;
     int w = 0;
     int h = 0;
+    int radius = 0;  // its corners' radius in px (Windows 11 rounds them); 0 = square
 };
 
 // Desk mode, window owner -> viewer: the owner's windows on its virtual display, topmost first. Sent
@@ -326,7 +327,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Pong, t, t_peer)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(DeskMove, x, y)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(DeskCursor, shape)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(DeskRect, x, y, w, h)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(DeskWindow, id, x, y, w, h)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(DeskWindow, id, x, y, w, h, radius)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(DeskLayout, desk_w, desk_h, active, windows)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Layout, you_are, set_at)
 inline void to_json(nlohmann::json& j, const Identify&) {

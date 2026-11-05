@@ -209,7 +209,9 @@ void WindowLink::set_peer(const proto::Hello& hello) {
     {
         std::lock_guard lock(mutex_);
         codec_ = codec::choose(options_.codec, options_.video_encode, hello.video_decode);
-        log::info("video: windows sent to '{}' go as {} ({})", hello.hostname, codec_.codec, codec_.why);
+        desk_codec_ = codec::choose_desk(options_.codec, options_.video_encode, hello.video_decode);
+        log::info("video: windows sent to '{}' go as {} ({}); desk mode as {} ({})", hello.hostname, codec_.codec,
+                  codec_.why, desk_codec_.codec, desk_codec_.why);
     }
     if (!options_.desk) return;
     if (!hello.desk) {
@@ -261,10 +263,15 @@ bool WindowLink::handle(const proto::Message& msg) {
     std::lock_guard lock(mutex_);
     if (std::holds_alternative<proto::VideoKeyframe>(msg)) {
         if (share_) share_->request_keyframe();  // our window, shown over there: its decoder needs one
+        std::lock_guard desk_lock(desk_share_mutex_);
+        if (desk_share_) desk_share_->request_keyframe();  // or our desk
         return true;
     }
     if (const auto* stats = std::get_if<proto::VideoStats>(&msg)) {
-        if (share_ && stats->latency_ms >= 0) share_->on_viewer_stats(stats->latency_ms);  // its bitrate
+        if (stats->latency_ms < 0) return true;
+        if (share_) share_->on_viewer_stats(stats->latency_ms);  // its bitrate
+        std::lock_guard desk_lock(desk_share_mutex_);
+        if (desk_share_) desk_share_->on_viewer_stats(stats->latency_ms);
         return true;
     }
     // The peer's input on one of our windows: the viewer's (window stream) or its desk overlay's.
@@ -437,6 +444,14 @@ void WindowLink::desk_main(std::stop_token stop) {
     }
 
     std::unique_ptr<DeskShare> share;
+    // The share goes; the viewer's feedback (handle()) must not reach it any more.
+    const auto forget_share = [&] {
+        {
+            std::lock_guard desk_lock(desk_share_mutex_);
+            desk_share_ = nullptr;
+        }
+        share.reset();
+    };
     display::Rect vdd_rect;
     SIZE size{0, 0};
     std::optional<Clock::time_point> stop_at;
@@ -455,7 +470,7 @@ void WindowLink::desk_main(std::stop_token stop) {
         stop_at.reset();
         if (!share && !(vdd && vdd->attached())) return;
         go_live(false);
-        share.reset();
+        forget_share();
         {
             std::lock_guard lock(parked_mutex_);
             for (auto& [hwnd, mover] : parked_) mover->restore(hwnd);
@@ -470,15 +485,23 @@ void WindowLink::desk_main(std::stop_token stop) {
     };
     const auto make_share = [&](const VirtualDisplay::MonitorRect& r) {
         try {
+            std::string codec;
+            {
+                std::lock_guard lock(mutex_);
+                codec = desk_codec_.codec;
+            }
             share = std::make_unique<DeskShare>(
                 r, region,
                 [this](const proto::FrameHeader& hdr, std::span<const std::uint8_t> p) { return send_frame(hdr, p); },
                 [this](const proto::DeskLayout& layout) { send(layout); },
-                DeskShare::Options{.jpeg_quality = std::max(options_.jpeg_quality, 80), .max_fps = options_.max_fps});
+                DeskShare::Options{
+                    .jpeg_quality = std::max(options_.jpeg_quality, 80), .max_fps = options_.max_fps, .codec = codec});
+            std::lock_guard desk_lock(desk_share_mutex_);
+            desk_share_ = share.get();
             return true;
         } catch (const std::exception& e) {
             log::error("desk: {}", e.what());
-            share.reset();
+            forget_share();
             return false;
         }
     };
@@ -504,7 +527,7 @@ void WindowLink::desk_main(std::stop_token stop) {
             return;
         }
         go_live(false);
-        share.reset();
+        forget_share();
         const auto side = peer_side_.load();
         const bool ok = vdd->attached() ? vdd->match_peer(w, h, side) : vdd->attach(w, h, 60, side);
         const auto r = vdd->rect();
@@ -569,7 +592,7 @@ void WindowLink::desk_main(std::stop_token stop) {
                 // Moved in the display settings: positions are relative to it, so start sharing anew.
                 vdd_rect = to_rect(r->rect);
                 region.set_vdd({.device = device, .rect = vdd_rect, .live = desk_live_.load()});
-                share.reset();
+                forget_share();
                 if (!make_share(*r)) finish();
             }
         }

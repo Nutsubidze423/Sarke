@@ -10,20 +10,28 @@
 //
 // --auto moves the window half onto the VDD, checks the tracked rect, that frames go out and get
 // drawn, that the overlay hides once the window is back, then puts the window back and detaches.
+// Then the same with H.264 (roadmap P2.7b), where this PC has a hardware encoder: one stream of the
+// whole VDD (layer "desk", window 0, the VDD's size), starting with a keyframe, seq without gaps,
+// every frame decodable, and the layout with the window's corner radius.
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <format>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 #include "desk_share.h"
 #include "desk_view.h"
+#include "h264_decoder.h"
+#include "kvm/annexb.h"
 #include "kvm/desk_region.h"
 #include "kvm/dpi.h"
 #include "kvm/log.h"
@@ -301,6 +309,75 @@ int wmain(int argc, wchar_t** argv) {
                 kvm::log::info("sent {} frames ({} KB), drawn {}", share.frames_sent(), bytes / 1024,
                                view.frames_shown());
                 if (list) print_windows(share);
+            }
+        }
+    }
+    if (automatic) {
+        // H.264: one stream of the whole VDD.
+        const auto window = window_with_title(title);
+        if (window) {
+            kvm::desk::Region region;
+            region.set_vdd({.device = kvm::to_utf8(vdd->device()), .rect = vr, .live = true});
+            std::mutex mutex;
+            std::vector<kvm::proto::FrameHeader> headers;
+            std::vector<std::vector<std::uint8_t>> units;
+            kvm::proto::DeskLayout layout;
+            auto capture = [&](const kvm::proto::FrameHeader& h, std::span<const std::uint8_t> payload) {
+                std::lock_guard lock(mutex);
+                headers.push_back(h);
+                units.emplace_back(payload.begin(), payload.end());
+                return true;
+            };
+            const HWND hwnd = window->hwnd;
+            WINDOWPLACEMENT saved{sizeof(saved)};
+            GetWindowPlacement(hwnd, &saved);
+            bool h264 = false;
+            {
+                kvm::DeskShare share(*vdd_rect, region, capture,
+                                     [&](const kvm::proto::DeskLayout& l) {
+                                         std::lock_guard lock(mutex);
+                                         layout = l;
+                                     },
+                                     {.max_fps = 30, .codec = "h264"});
+                h264 = std::string_view(share.codec()) == "h264";
+                if (h264) {
+                    ShowWindow(hwnd, SW_RESTORE);
+                    const int x = side == kvm::display::Side::Right ? vr.left - 400 : vr.right - 400;
+                    SetWindowPos(hwnd, HWND_TOP, x, vr.top + 100, 800, 600, SWP_NOACTIVATE);
+                    std::this_thread::sleep_for(2500ms);
+                } else {
+                    kvm::log::info("no hardware H.264 encoder here: the H.264 checks are skipped");
+                }
+            }  // the share stops: no more frames
+            SetWindowPlacement(hwnd, &saved);
+            if (h264) {
+                std::lock_guard lock(mutex);
+                bool whole = !headers.empty();
+                for (const auto& h : headers) {
+                    whole = whole && h.layer == "desk" && h.codec == "h264" && h.window == 0 && h.width == vr.width() &&
+                            h.height == vr.height() && h.desk_w == vr.width();
+                }
+                check(whole, std::format("{} frames, each the whole VDD as h264 ({}x{})", headers.size(), vr.width(),
+                                         vr.height()));
+                bool in_order = !headers.empty() && headers.front().keyframe;
+                for (std::size_t i = 1; i < headers.size(); ++i) {
+                    in_order = in_order && headers[i].seq == headers[i - 1].seq + 1;
+                }
+                check(in_order, "the first is a keyframe, seq has no gaps");
+                std::string why;
+                auto decoder = kvm::H264Decoder::create(nullptr, why);
+                std::size_t decoded = 0;
+                for (std::size_t i = 0; decoder && i < units.size(); ++i) {
+                    if (!kvm::annexb::check(units[i], headers[i].keyframe).empty()) continue;
+                    const auto picture = decoder->decode(units[i], headers[i].t_capture_us);
+                    if (picture && picture->width == vr.width() && picture->height == vr.height()) ++decoded;
+                }
+                check(decoded == units.size(), std::format("{} of {} decode to the VDD's size", decoded, units.size()));
+                const auto it = std::find_if(layout.windows.begin(), layout.windows.end(), [&](const auto& w) {
+                    return w.id == reinterpret_cast<std::uint64_t>(hwnd);
+                });
+                check(it != layout.windows.end(), std::format("the layout has the window, corner radius {} px",
+                                                              it != layout.windows.end() ? it->radius : -1));
             }
         }
     }

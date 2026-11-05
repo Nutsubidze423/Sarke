@@ -91,7 +91,7 @@ never hand-built JSON.
 | `key` | both | `vk`, `scan`, `down`, `extended` |
 | `desk_move` | controller → controlled (desk mode) | `x`, `y`: the cursor on the controlled PC's primary monitor, in px (that is, the controller's VDD) |
 | `desk_cursor` | window owner → viewer | `shape` (`arrow`/`ibeam`/`hand`/`sizewe`/…): the cursor shape over the owner's windows |
-| `desk_layout` | window owner → viewer | `desk_w`, `desk_h`, `active` (the owner's active window is on the VDD, so the viewer raises its overlay), `windows` [`id`, `x`, `y`, `w`, `h`] (the windows on the VDD, top to bottom). Moving a window sends only this message |
+| `desk_layout` | window owner → viewer | `desk_w`, `desk_h`, `active` (the owner's active window is on the VDD, so the viewer raises its overlay), `windows` [`id`, `x`, `y`, `w`, `h`, `radius`] (the windows on the VDD, top to bottom; `radius`: their rounded corners in px, 0 = square). Moving a window sends only this message |
 | `stream_start` | window owner → viewer | `hwnd`, `title`, `width`, `height` |
 | `stream_stop` | both | `hwnd`. Owner → viewer: the stream stopped. Viewer → owner: "take it back" |
 | `video_config` | window owner → viewer, after `stream_start` | `codec` (`h264`/`jpeg`), `width`, `height`: what the frames will be, so the viewer can get its decoder ready. Only to a PC whose `hello` had `video_decode` |
@@ -119,7 +119,7 @@ never hand-built JSON.
 | `codec` | `jpeg`, or `h264` for a window stream |
 | `keyframe` | `h264`: the frame is an IDR picture with SPS and PPS in front, where a viewer can start decoding (missing = false) |
 | `layer` | `"desk"` in desk mode |
-| `window` | desk mode: the window this picture is of (one window per frame, WGC window capture) |
+| `window` | desk mode: the window this picture is of (one window per frame, WGC window capture). With `h264`: 0, the picture is the whole VDD (`desk_w` × `desk_h`) and the viewer cuts each window out at its `desk_layout` rect, rounded by its `radius` |
 | `x`, `y` | desk mode: where the picture sits in the window's frame |
 | `alpha_bytes` | desk mode: the payload is the JPEG (4:4:4) followed by this many bytes of alpha runs `[u8 alpha][u16 count]` (rounded corners) |
 
@@ -144,5 +144,9 @@ owner from the viewer's `hello`:
   `video_decode`, and the owner wasn't started with `--codec jpeg`;
 - else `jpeg`, which every Sarke shows. A viewer whose `hello` has no `video_decode` (an older Sarke)
   gets JPEG.
+
+Desk mode follows the same rule with `h264-desk` in the viewer's `video_decode`: one H.264 stream of
+the whole VDD instead of a JPEG per window (roadmap P2.7). A viewer lists `h264-desk` only once it
+can draw that; until then desk mode stays JPEG.
 
 Both programs log the decision and its reason when a session starts.
