@@ -45,6 +45,16 @@ int main() {
     const auto cant = codec::choose(codec::Choice::Auto, both, jpeg_only);
     check(cant.codec == "jpeg" && cant.why == "the other PC can't decode H.264", "a viewer without H.264: jpeg");
 
+    // Desk mode: one picture of the whole virtual display, only to a viewer that can draw it.
+    const std::vector<std::string> desk = {"h264-desk", "h264", "jpeg"};
+    check(codec::choose_desk(codec::Choice::Auto, both, desk).codec == "h264", "desk mode, both can: h264");
+    const auto window_only = codec::choose_desk(codec::Choice::Auto, both, both);
+    check(window_only.codec == "jpeg" && window_only.why == "the other PC can't show desk mode as H.264",
+          "desk mode to a viewer that decodes H.264 but doesn't list h264-desk: jpeg");
+    check(codec::choose_desk(codec::Choice::Jpeg, both, desk).codec == "jpeg" &&
+              codec::choose_desk(codec::Choice::Auto, jpeg_only, desk).codec == "jpeg",
+          "desk mode with --codec jpeg, or without an encoder: jpeg");
+
     std::printf("\n%s\n", g_failures == 0 ? "all passed" : "FAILED");
     return g_failures == 0 ? 0 : 1;
 }

@@ -1245,6 +1245,22 @@ Attempts are rate-limited.
       - `desk_layout` gains each window's corner radius. The owner knows it (`DWMWA_WINDOW_CORNER_PREFERENCE`, its Windows version); the viewer doesn't.
       - The viewer decodes the H.264 picture into the surface. The prototype copies a captured texture instead: the decode and conversion are P2.4's, 2–3 ms.
       - A window with real transparency (acrylic, mica) shows the owner's VDD behind it, not the viewer's desktop. Today's per-window capture does the same: WGC captures the effect as drawn on the owner.
+  - **P2.7b result (2026-11-05):** the owner side.
+    - **`DeskShare` with `codec = "h264"`** sends one stream of the whole VDD:
+      - P2.4c's `H264Sender` on a GPU capture of the VDD monitor, without the cursor (the viewer shows its own, shaped by `desk_cursor`);
+      - frames are `layer "desk"`, `window 0`, `desk_w` × `desk_h`;
+      - the per-window JPEG captures don't run then; `desk_layout` still goes out on every change;
+      - `resend()` (a reconnect) sends the layout and asks for a keyframe;
+      - the viewer's `video_keyframe` and `video_stats` reach the desk share too.
+    - **`desk_layout` windows gain `radius`:** the owner reads DWM's corner preference (Windows 11), 8 or 4 px at the window's DPI. It is 0 for maximized windows, windows that opt out, and Windows 10.
+    - **Negotiation:** desk mode goes as H.264 only to a viewer whose hello lists `h264-desk` (`codec::choose_desk`). No viewer lists it before P2.7c, so this change leaves desk mode on JPEG between PCs, as before. Both programs log the desk decision next to the window one.
+    - **Tests:**
+      - `codec_test`: 3 more checks;
+      - `desk_test` (vdd), after its JPEG checks unchanged:
+        - the H.264 share sent 73 frames in ~2.5 s, each the whole VDD (1920×1080);
+        - the first is a keyframe, `seq` has no gaps, and all 73 decode;
+        - the layout has the window, corner radius 0 on this Windows 10 PC.
+    - `ctest --preset local` 40/41. `remote_input_test` (vdd, untouched by this change) missed its Paint line once; 3 runs of it alone passed.
 
 - [ ] **P2.8 Transport: TCP or UDP, decided by measurement** (M), branch `phase2/transport-eval`.
   - **Measure:** on Wi-Fi and a hotspot, with the HUD, the p50/p99 capture→display latency at the target bitrate over TCP.

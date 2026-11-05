@@ -56,6 +56,7 @@ class ViewerWindow;
 class FrameRouter;
 class WindowShare;
 class RemoteInput;
+class DeskShare;
 class DeskView;
 class DeskInput;
 class WindowMover;
@@ -141,6 +142,9 @@ private:
     int peer_w_ = 1920;
     int peer_h_ = 1080;
     codec::Decision codec_{"jpeg", "no peer yet"};   // mutex_: what windows sent to the viewer go as
+    codec::Decision desk_codec_{"jpeg", "no peer yet"};  // mutex_: what desk mode goes as
+    std::mutex desk_share_mutex_;  // desk_share_ (the desk thread's share, for the viewer's feedback)
+    DeskShare* desk_share_ = nullptr;
     std::atomic<bool> peer_knows_codecs_{false};  // its hello listed video_decode: it understands video_config
     std::shared_ptr<net::FrameChannel> video_;
     std::unique_ptr<FrameRouter> router_;

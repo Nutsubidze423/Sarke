@@ -5,6 +5,8 @@
 //   - "h264" when it can encode H.264, the viewer can decode it, and --codec doesn't say jpeg;
 //   - else "jpeg", which every Sarke can decode and encode. A viewer whose hello has no list (an
 //     older Sarke) gets JPEG.
+// Desk mode is the same with "h264-desk": one H.264 picture of the whole virtual display, which the
+// viewer cuts the windows out of (roadmap P2.7). A viewer lists it once it can draw that.
 //
 //   const auto choice = kvm::codec::parse(arg);                       // --codec auto|h264|jpeg
 //   const auto d = kvm::codec::choose(*choice, my_encode, peer_hello.video_decode);
@@ -21,6 +23,7 @@ namespace kvm::codec {
 
 inline constexpr std::string_view kJpeg = "jpeg";
 inline constexpr std::string_view kH264 = "h264";
+inline constexpr std::string_view kH264Desk = "h264-desk";
 
 // --codec: "auto" (the default) and "h264" both mean H.264 when both PCs can; "jpeg" forces JPEG.
 enum class Choice { Auto, Jpeg };
@@ -49,6 +52,15 @@ inline Decision choose(Choice choice, const std::vector<std::string>& my_encode,
         return {std::string(kJpeg),
                 peer_decode.empty() ? "the other PC is an older Sarke" : "the other PC can't decode H.264"};
     }
+    return {std::string(kH264), "both PCs can"};
+}
+
+// The same for desk mode: H.264 only to a viewer that lists "h264-desk"; else per-window JPEG.
+inline Decision choose_desk(Choice choice, const std::vector<std::string>& my_encode,
+                            const std::vector<std::string>& peer_decode) {
+    if (choice == Choice::Jpeg) return {std::string(kJpeg), "--codec jpeg"};
+    if (!has(my_encode, kH264)) return {std::string(kJpeg), "no hardware H.264 encoder on this PC"};
+    if (!has(peer_decode, kH264Desk)) return {std::string(kJpeg), "the other PC can't show desk mode as H.264"};
     return {std::string(kH264), "both PCs can"};
 }
 

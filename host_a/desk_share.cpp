@@ -2,6 +2,8 @@
 
 #include "desk_share.h"
 
+#include <dwmapi.h>
+
 #include <algorithm>
 #include <chrono>
 #include <map>
@@ -12,6 +14,8 @@
 #include "jpeg_encoder.h"
 #include "kvm/log.h"
 #include "kvm/net.h"
+
+#pragma comment(lib, "dwmapi.lib")
 
 namespace kvm {
 
@@ -43,6 +47,16 @@ void alpha_runs(const std::uint8_t* first, int width, int height, int stride, st
     if (!any) out.clear();
 }
 
+// The radius of a window's rounded corners as DWM draws them (Windows 11), in physical px; 0 for
+// square ones (Windows 10, maximized windows, windows that opt out). The viewer clips the window to it.
+int corner_radius(HWND hwnd) {
+    DWM_WINDOW_CORNER_PREFERENCE pref = DWMWCP_DEFAULT;
+    if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &pref, sizeof(pref)))) return 0;
+    if (IsZoomed(hwnd) || pref == DWMWCP_DONOTROUND) return 0;
+    const int dp = pref == DWMWCP_ROUNDSMALL ? 4 : 8;
+    return MulDiv(dp, static_cast<int>(GetDpiForWindow(hwnd)), 96);
+}
+
 }  // namespace
 
 struct DeskShare::Window {
@@ -65,10 +79,35 @@ DeskShare::DeskShare(const VirtualDisplay::MonitorRect& vdd, desk::Region& regio
       layout_(std::move(layout)),
       options_(options),
       vdd_{vdd.rect.left, vdd.rect.top, vdd.rect.right, vdd.rect.bottom} {
+    if (options_.codec == "h264") {
+        // One stream of the whole VDD: the viewer cuts the windows out at their layout rects.
+        std::string why = "no GPU with video support";
+        auto gpu = GpuDevice::create();
+        auto send_desk = [this](const proto::FrameHeader& h, std::span<const std::uint8_t> payload) {
+            proto::FrameHeader desk = h;
+            desk.layer = "desk";
+            desk.desk_w = vdd_.width();
+            desk.desk_h = vdd_.height();
+            desk.window = 0;  // the whole VDD, not one window
+            ++sent_;
+            return send_(desk, payload);
+        };
+        h264_ = gpu ? H264Sender::create(gpu, vdd_.width(), vdd_.height(), send_desk,
+                                         {.max_fps = options_.max_fps, .bitrate = options_.h264_bitrate}, why)
+                    : nullptr;
+        if (h264_) {
+            // The cursor isn't in the picture: the viewer shows its own, in the shape desk_cursor says.
+            gpu_capture_ = ScreenCapture::for_monitor(vdd.monitor, false, gpu);
+            H264Sender* sender = h264_.get();
+            gpu_capture_->start_gpu([sender](GpuFrame&& f) { sender->put(std::move(f)); });
+        } else {
+            log::warn("desk: no H.264 ({}): JPEG per window", why);
+        }
+    }
     thread_ = std::jthread([this](std::stop_token stop) { run(stop); });
     tracker_ = std::make_unique<DeskTracker>(region_, [this](const auto& windows) { on_windows(windows); });
-    log::info("desk: sharing the other screen's windows ({}x{} at {},{})", vdd_.width(), vdd_.height(), vdd_.left,
-              vdd_.top);
+    log::info("desk: sharing the other screen's windows ({}x{} at {},{}) as {}", vdd_.width(), vdd_.height(), vdd_.left,
+              vdd_.top, codec());
 }
 
 DeskShare::~DeskShare() {
@@ -80,6 +119,9 @@ DeskShare::~DeskShare() {
         if (w->capture) w->capture->stop();
     }
     if (screen_) screen_->stop();
+    if (h264_) h264_->stop();  // the sender before the capture that feeds it, and stays until it stopped
+    if (gpu_capture_) gpu_capture_->stop();
+    h264_.reset();
     log::info("desk: stopped after {} pictures", sent_.load());
 }
 
@@ -89,6 +131,14 @@ void DeskShare::resend() {
         resend_ = true;
     }
     cv_.notify_all();
+}
+
+void DeskShare::request_keyframe() {
+    if (h264_) h264_->request_keyframe();
+}
+
+void DeskShare::on_viewer_stats(int latency_ms) {
+    if (h264_) h264_->on_viewer_stats(latency_ms);
 }
 
 void DeskShare::notify_frames() {
@@ -113,7 +163,8 @@ void DeskShare::on_windows(const std::vector<DeskTracker::Window>& windows) {
                                   .x = w.frame.left - vdd.left,
                                   .y = w.frame.top - vdd.top,
                                   .w = w.frame.width(),
-                                  .h = w.frame.height()});
+                                  .h = w.frame.height(),
+                                  .radius = corner_radius(w.hwnd)});
     }
     layout_(layout);  // right away: a moved window is shown at its new place without a new picture
     {
@@ -242,6 +293,13 @@ void DeskShare::run(std::stop_token stop) {
             if (resend) layout = last_layout_;
         }
         if (stop.stop_requested()) break;
+        if (h264_) {  // one stream of the whole VDD: H264Sender sends it; here only the layout
+            if (resend) {
+                layout_(layout);
+                h264_->request_keyframe();  // the viewer starts over from nothing
+            }
+            continue;
+        }
         if (changed) sync(*changed);
         if (resend) {
             layout_(layout);

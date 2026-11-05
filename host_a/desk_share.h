@@ -15,6 +15,11 @@
 //
 // Pictures: JPEG 4:4:4 (sharp text) + run-length alpha, at most max_fps per window, only when the
 // window's content changed. Every 5 s the sender logs fps, size and bitrate.
+//
+// With Options::codec "h264" (roadmap P2.7, when the viewer lists "h264-desk"): one H.264 stream of
+// the whole VDD instead (h264_sender.h; frames with layer "desk", window 0, the VDD's size). The
+// viewer cuts each window out of it at its desk_layout rect, rounded by its `radius`. JPEG stays the
+// fallback when this PC has no hardware encoder.
 #pragma once
 
 #include <atomic>
@@ -26,11 +31,13 @@
 #include <mutex>
 #include <optional>
 #include <stop_token>
+#include <string>
 #include <thread>
 #include <vector>
 
 #include "capture.h"
 #include "desk_tracker.h"
+#include "h264_sender.h"
 #include "kvm/desk_region.h"
 #include "kvm/protocol.h"
 #include "video_sender.h"
@@ -45,7 +52,9 @@ public:
 
     struct Options {
         int jpeg_quality = 80;
-        int max_fps = 30;  // per window
+        int max_fps = 30;            // per window (JPEG), or for the whole VDD (H.264)
+        std::string codec = "jpeg";  // "h264": one stream of the whole VDD (kvm/codec.h choose_desk)
+        int h264_bitrate = 8'000'000;
     };
 
     // `vdd` must be attached; `region` must already hold it and outlive the share.
@@ -58,6 +67,11 @@ public:
 
     // The peer lost what it showed (e.g. reconnected): send the layout and every picture again.
     void resend();
+    // From the viewer (proto::VideoKeyframe / VideoStats): H.264 only.
+    void request_keyframe();
+    void on_viewer_stats(int latency_ms);
+    // "h264" or "jpeg": what the pictures go as.
+    const char* codec() const { return h264_ ? "h264" : "jpeg"; }
 
     std::uint64_t frames_sent() const { return sent_; }
     const DeskTracker& tracker() const { return *tracker_; }
@@ -87,6 +101,10 @@ private:
 
     std::map<std::uint64_t, std::unique_ptr<Window>> windows_;  // sender thread only
     std::unique_ptr<ScreenCapture> screen_;                       // sender thread only
+
+    // H.264: the whole VDD on the GPU, one encoder.
+    std::unique_ptr<H264Sender> h264_;
+    std::unique_ptr<ScreenCapture> gpu_capture_;
 
     std::jthread thread_;
     std::unique_ptr<DeskTracker> tracker_;  // last: its callbacks need everything above
