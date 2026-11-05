@@ -1223,6 +1223,28 @@ Attempts are rate-limited.
     - windows with real transparency;
     - pop-ups and menus;
     - text quality at 4:2:0 (see P2.10).
+  - **P2.7a result (2026-11-05):** the viewer half works; go on with P2.7b and P2.7c.
+    - **[tools/dcomp_desk_prototype.cpp](../tools/dcomp_desk_prototype.cpp)** runs it on this PC:
+      - the VDD is captured whole on the GPU;
+      - an overlay over the primary monitor (DirectComposition, `WS_EX_NOREDIRECTIONBITMAP`) holds one surface with that picture;
+      - each window `DeskTracker` reports gets a visual of that surface, clipped to its frame.
+    - **Checked in screenshots, with Paint on the VDD:**
+      - the window is drawn on the primary monitor at its place, with everything around it visible;
+      - two overlapping windows come out in the right order: they are cut from one picture that already has the real stacking.
+    - **Clicks:**
+      - outside the windows they go to the window below, through a window region of rectangles;
+      - inside, they reach the overlay, so DeskView's input forwarding can stay as it is.
+    - **Rounded corners** (Windows 11; this PC has Windows 10's square ones) need two things:
+      - `IDCompositionRectangleClip` radii with `SetBorderMode(DCOMPOSITION_BORDER_MODE_SOFT)`, so the edge is antialiased;
+      - a window region of plain rectangles. A rounded GDI region is all-or-nothing per pixel and cut the antialiased edge back to stairs. A click on the few pixels of a corner outside the rounding lands on the overlay, where nothing is drawn.
+    - **Cost on the viewer's CPU per picture, 1920×1080, at ~54 pictures/s:**
+      - copy into the surface p50 0.07–0.09 ms, p95 under 0.8 ms;
+      - `Commit` p50 0.8 ms, p95 under 1.9 ms;
+      - today's desk mode spends 14–24 ms decoding JPEG and 7.7–10 ms composing on the CPU per picture ([PERF.md](PERF.md)).
+    - **For P2.7b and P2.7c:**
+      - `desk_layout` gains each window's corner radius. The owner knows it (`DWMWA_WINDOW_CORNER_PREFERENCE`, its Windows version); the viewer doesn't.
+      - The viewer decodes the H.264 picture into the surface. The prototype copies a captured texture instead: the decode and conversion are P2.4's, 2–3 ms.
+      - A window with real transparency (acrylic, mica) shows the owner's VDD behind it, not the viewer's desktop. Today's per-window capture does the same: WGC captures the effect as drawn on the owner.
 
 - [ ] **P2.8 Transport: TCP or UDP, decided by measurement** (M), branch `phase2/transport-eval`.
   - **Measure:** on Wi-Fi and a hotspot, with the HUD, the p50/p99 capture→display latency at the target bitrate over TCP.
