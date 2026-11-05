@@ -12,7 +12,10 @@ namespace kvm {
 
 VideoCodecs probe_video_codecs() {
     VideoCodecs c;
-    if (H264Decoder::available()) c.decode.emplace_back(codec::kH264);
+    if (H264Decoder::available()) {
+        c.decode.emplace_back(codec::kH264);
+        c.decode.emplace_back(codec::kH264Desk);  // desk mode from one picture (client_b/desk_view.h)
+    }
     c.decode.emplace_back(codec::kJpeg);
     if (const auto gpu = GpuDevice::create(); gpu && H264Encoder::available(*gpu)) c.encode.emplace_back(codec::kH264);
     c.encode.emplace_back(codec::kJpeg);

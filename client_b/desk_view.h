@@ -17,6 +17,11 @@
 // window over the primary monitor with per-pixel alpha; Windows passes clicks on its transparent
 // pixels to whatever is below, so only the drawn windows take input.
 //
+// H.264 (roadmap P2.7c, when the owner sends layer "desk" frames as "h264"): one picture of the owner's
+// whole virtual display, decoded on this PC's GPU (h264_stream.h); each window is cut out of it at its
+// desk_layout rect, rounded by its radius, by DirectComposition (desk_compositor.h) on a second overlay
+// window. Its window region takes the clicks. A JPEG picture switches back to the layered overlay.
+//
 // Input: this PC's own mouse and keyboard on the drawn windows go to their owner (remote_mouse_move,
 // mouse_button, mouse_wheel, key; positions normalized over the owner's virtual display, not clamped
 // while a button is held so a window can be dragged back across). Injected input (the KVM moving
@@ -37,19 +42,23 @@
 #include <functional>
 #include <future>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string_view>
 #include <thread>
 #include <vector>
 
+#include "desk_compositor.h"
+#include "h264_stream.h"
+#include "kvm/gpu_device.h"
 #include "kvm/protocol.h"
 #include "kvm/video.h"
 #include "viewer_input.h"
 
 namespace kvm {
 
-class DeskView {
+class DeskView : private H264Stream::Target {
 public:
     using Sink = std::function<bool(const proto::Message&)>;
 
@@ -75,6 +84,9 @@ public:
 
     // The owner's cursor shape over its windows (desk_cursor), any thread.
     void set_cursor_shape(std::string_view shape);
+
+    // The owner's clock minus ours, for the latency of H.264 pictures (any thread).
+    void set_clock_offset_us(std::int64_t offset);
 
     // Updates drawn so far (tests, logs).
     std::uint64_t frames_shown() const { return shown_; }
@@ -115,7 +127,15 @@ private:
     // the owner's (the drawn overlay on top) or this PC's own (a local window the user raised).
     enum class Front { Owner, Local };
 
+    // H264Stream::Target: H.264 pictures of the whole VDD, from the stream's thread.
+    std::shared_ptr<GpuDevice> gpu() override;
+    void show(Microsoft::WRL::ComPtr<ID3D11Texture2D> bgra, int width, int height, const FrameInfo& info) override;
+    void show(BgraImage& image, const FrameInfo& info) override;
+    bool send_to_owner(const proto::Message& msg);
+
     void ui_main(std::promise<void>* ready);
+    void set_mode(bool h264);  // UI thread: which overlay window is in use
+    void update_h264(bool new_picture, bool raise_owner);  // UI thread
     void decode_main(std::stop_token stop);
     static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
     LRESULT handle(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -144,6 +164,16 @@ private:
     std::optional<proto::DeskLayout> pending_layout_;
     std::map<std::uint64_t, Picture> pending_pictures_;
     bool pending_clear_ = false;
+    // The newest H.264 picture (a texture of gpu_'s device, or pixels after a software decode).
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> pending_texture_;
+    BgraImage pending_image_;
+    int pending_w_ = 0;
+    int pending_h_ = 0;
+    FrameInfo pending_info_;
+    bool pending_h264_ = false;
+
+    std::mutex gpu_mutex_;
+    std::shared_ptr<GpuDevice> gpu_;  // made on the first H.264 picture
 
     std::mutex sink_mutex_;
     Sink sink_;
@@ -166,9 +196,18 @@ private:
     HWINEVENTHOOK foreground_hook_ = nullptr;
     ViewerInput input_;
     int buttons_held_ = 0;
+    HWND layered_hwnd_ = nullptr;  // JPEG: per-pixel alpha, composed on the CPU
+    HWND dcomp_hwnd_ = nullptr;    // H.264: DirectComposition; hwnd_ is the one in use
+    bool h264_mode_ = false;
+    std::unique_ptr<DeskCompositor> compositor_;
+    BgraImage image_;  // the last H.264 picture from a software decode
+    std::vector<DeskCompositor::Cut> cuts_;
+    bool h264_shown_ = false;  // a picture is in the compositor's surface
+    FrameInfo h264_info_;      // the picture's, reported once it is on screen
 
     std::thread ui_thread_;
     std::jthread decode_thread_;
+    std::unique_ptr<H264Stream> h264_;  // last: its thread calls show() and gpu()
 };
 
 }  // namespace kvm

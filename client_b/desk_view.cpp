@@ -114,9 +114,15 @@ DeskView::DeskView() {
     ui_thread_ = std::thread([this, &ready] { ui_main(&ready); });
     started.wait();
     decode_thread_ = std::jthread([this](std::stop_token stop) { decode_main(stop); });
+    h264_ = std::make_unique<H264Stream>(
+        static_cast<H264Stream::Target&>(*this), "desk",
+        H264Stream::Feedback{
+            .keyframe = [this] { send_to_owner(proto::VideoKeyframe{}); },
+            .stats = [this](int latency_ms, int fps) { send_to_owner(proto::VideoStats{latency_ms, fps}); }});
 }
 
 DeskView::~DeskView() {
+    h264_.reset();  // its thread calls into this
     decode_thread_.request_stop();
     incoming_cv_.notify_all();
     if (decode_thread_.joinable()) decode_thread_.join();
@@ -125,6 +131,10 @@ DeskView::~DeskView() {
 }
 
 void DeskView::present(net::Frame&& frame, std::optional<std::int64_t> t_capture_local_us) {
+    if (frame.header.codec == "h264") {  // the whole VDD: every frame decoded, in order
+        h264_->push(std::move(frame));
+        return;
+    }
     {
         std::lock_guard lock(incoming_mutex_);
         const std::uint64_t window = frame.header.window;
@@ -150,6 +160,9 @@ void DeskView::clear() {
         std::lock_guard lock(pending_mutex_);
         pending_layout_.reset();
         pending_pictures_.clear();
+        pending_texture_.Reset();
+        pending_image_ = {};
+        pending_h264_ = false;
         pending_clear_ = true;
     }
     if (const HWND h = hwnd_) PostMessageW(h, kMsgUpdate, 0, 0);
@@ -167,6 +180,52 @@ void DeskView::set_input_sink(Sink sink) {
 
 void DeskView::set_cursor_shape(std::string_view shape) {
     cursor_ = LoadCursorW(nullptr, cursor_id(shape));
+}
+
+void DeskView::set_clock_offset_us(std::int64_t offset) {
+    if (h264_) h264_->set_clock_offset_us(offset);
+}
+
+bool DeskView::send_to_owner(const proto::Message& msg) {
+    Sink sink;
+    {
+        std::lock_guard lock(sink_mutex_);
+        sink = sink_;
+    }
+    return sink && sink(msg);
+}
+
+std::shared_ptr<GpuDevice> DeskView::gpu() {
+    std::lock_guard lock(gpu_mutex_);
+    if (!gpu_) gpu_ = GpuDevice::create();  // the GPU decodes when it can; WARP draws either way
+    if (!gpu_) gpu_ = GpuDevice::create_software();
+    return gpu_;
+}
+
+void DeskView::show(Microsoft::WRL::ComPtr<ID3D11Texture2D> bgra, int width, int height, const FrameInfo& info) {
+    {
+        std::lock_guard lock(pending_mutex_);
+        pending_texture_ = std::move(bgra);
+        pending_image_ = {};
+        pending_w_ = width;
+        pending_h_ = height;
+        pending_info_ = info;
+        pending_h264_ = true;
+    }
+    if (const HWND h = hwnd_) PostMessageW(h, kMsgUpdate, 0, 0);
+}
+
+void DeskView::show(BgraImage& image, const FrameInfo& info) {
+    {
+        std::lock_guard lock(pending_mutex_);
+        std::swap(pending_image_, image);
+        pending_texture_.Reset();
+        pending_w_ = pending_image_.width;
+        pending_h_ = pending_image_.height;
+        pending_info_ = info;
+        pending_h264_ = true;
+    }
+    if (const HWND h = hwnd_) PostMessageW(h, kMsgUpdate, 0, 0);
 }
 
 void DeskView::decode_main(std::stop_token stop) {
@@ -229,6 +288,11 @@ void DeskView::ui_main(std::promise<void>* ready) {
                                       screen_.bottom - screen_.top, nullptr, nullptr, instance, this);
     if (!hwnd) log::error("desk: the overlay window could not be created ({})", GetLastError());
     hwnd_ = hwnd;
+    layered_hwnd_ = hwnd;
+    // H.264: DirectComposition draws it (no redirection bitmap); the same handler, clicks and z-order.
+    dcomp_hwnd_ = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName,
+                                  L"Sarke desk", WS_POPUP, screen_.left, screen_.top, screen_.right - screen_.left,
+                                  screen_.bottom - screen_.top, nullptr, nullptr, instance, this);
     if (hwnd && !make_surface()) log::error("desk: no drawing surface");
     // Learn when the user raises one of this PC's own windows, so the overlay drops below it.
     foreground_hook_ = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr, &on_foreground_event,
@@ -243,6 +307,8 @@ void DeskView::ui_main(std::promise<void>* ready) {
     if (foreground_hook_) UnhookWinEvent(foreground_hook_);
     foreground_hook_ = nullptr;
     hwnd_ = nullptr;
+    compositor_.reset();
+    if (dcomp_hwnd_) DestroyWindow(dcomp_hwnd_);
     if (hwnd) DestroyWindow(hwnd);
     free_surface();
     t_self = nullptr;
@@ -253,7 +319,7 @@ void DeskView::on_foreground_event(HWINEVENTHOOK, DWORD, HWND hwnd, LONG id_obje
 }
 
 void DeskView::on_local_foreground(HWND fg) {
-    if (fg == hwnd_ || GetAncestor(fg, GA_ROOT) != fg) return;  // our overlay or a child control
+    if (fg == layered_hwnd_ || fg == dcomp_hwnd_ || GetAncestor(fg, GA_ROOT) != fg) return;  // ours, or a child
     DWORD pid = 0;
     GetWindowThreadProcessId(fg, &pid);
     if (pid == GetCurrentProcessId())
@@ -315,16 +381,54 @@ void DeskView::update() {
     std::optional<proto::DeskLayout> layout;
     std::map<std::uint64_t, Picture> pictures;
     bool clear = false;
+    bool h264_picture = false;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+    int texture_w = 0, texture_h = 0;
     {
         std::lock_guard lock(pending_mutex_);
         layout = std::exchange(pending_layout_, std::nullopt);
         pictures.swap(pending_pictures_);
         clear = std::exchange(pending_clear_, false);
+        h264_picture = std::exchange(pending_h264_, false);
+        if (h264_picture) {
+            texture = std::move(pending_texture_);
+            std::swap(image_, pending_image_);
+            texture_w = pending_w_;
+            texture_h = pending_h_;
+            h264_info_ = pending_info_;
+        }
+    }
+    if (h264_picture && !compositor_) {
+        // The first H.264 picture: the DirectComposition overlay, on the device it was decoded on.
+        std::string why;
+        compositor_ = DeskCompositor::create(dcomp_hwnd_, gpu(), why);
+        if (!compositor_) log::error("{}", why);
+    }
+    if (h264_picture && compositor_) {
+        const bool drawn =
+            texture ? compositor_->set_picture(texture.Get(), texture_w, texture_h) : compositor_->set_picture(image_);
+        h264_shown_ = h264_shown_ || drawn;
     }
     if (clear) {
         hide();
         layout_ = {};
         pictures_.clear();
+        h264_shown_ = false;
+    }
+    // The owner sends either one H.264 picture of its VDD or a JPEG per window: the overlay follows.
+    if (h264_picture && compositor_) set_mode(true);
+    if (!pictures.empty()) set_mode(false);
+    if (h264_mode_) {
+        bool raise_owner = false;
+        if (layout) {
+            layout_ = std::move(*layout);
+            if (layout_.active && front_ != Front::Owner) {
+                front_ = Front::Owner;
+                raise_owner = true;
+            }
+        }
+        if (layout || h264_picture) update_h264(h264_picture, raise_owner);
+        return;
     }
     if (!layout && pictures.empty()) return;
     const HWND hwnd = hwnd_;
@@ -445,6 +549,75 @@ void DeskView::update() {
              .present_us = now - p.decoded_at_us});
     }
     if (!visible_ || set_changed || raise_owner) apply_z();
+}
+
+void DeskView::set_mode(bool h264) {
+    if (h264 == h264_mode_) return;
+    hide();  // the window in use until now
+    h264_mode_ = h264;
+    hwnd_ = h264 ? dcomp_hwnd_ : layered_hwnd_;
+    first_update_ = true;
+    cuts_.clear();
+    log::info("desk: drawing the other PC's windows from {}", h264 ? "one H.264 picture of its screen" : "JPEG");
+}
+
+void DeskView::update_h264(bool new_picture, bool raise_owner) {
+    if (!compositor_) return;
+    // Each window cut out of the picture at its place, bottom first, clipped to our screen.
+    const int sw = screen_.right - screen_.left;
+    const int sh = screen_.bottom - screen_.top;
+    const RECT clip{0, 0, std::min(layout_.desk_w, sw), std::min(layout_.desk_h, sh)};
+    const int rim = MulDiv(kResizeRimDp, static_cast<int>(GetDpiForWindow(dcomp_hwnd_)), 96);
+    std::vector<DeskCompositor::Cut> cuts;
+    for (auto it = layout_.windows.rbegin(); it != layout_.windows.rend(); ++it) {
+        const RECT full{it->x, it->y, it->x + it->w, it->y + it->h};
+        RECT r{};
+        if (!IntersectRect(&r, &full, &clip)) continue;
+        RECT hit{r.left - rim, r.top - rim, r.right + rim, r.bottom + rim};
+        IntersectRect(&hit, &hit, &clip);
+        cuts.push_back({.rect = r, .hit = hit, .radius = it->radius});
+    }
+    const auto same = [](const std::vector<DeskCompositor::Cut>& a, const std::vector<DeskCompositor::Cut>& b) {
+        if (a.size() != b.size()) return false;
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            if (!EqualRect(&a[i].rect, &b[i].rect) || !EqualRect(&a[i].hit, &b[i].hit) || a[i].radius != b[i].radius) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const bool changed = !same(cuts, cuts_);
+    if (changed) {
+        compositor_->set_cuts(cuts);
+        cuts_ = cuts;
+    }
+    if (cuts_.empty()) {
+        hide();
+        return;
+    }
+    if (!h264_shown_) return;  // nothing to show yet: the first picture is on its way
+    if (!changed && !new_picture && visible_) return;
+    if (!compositor_->commit()) {
+        log::warn("desk: the overlay couldn't be updated");
+        return;
+    }
+    if (new_picture) {
+        ++shown_;
+        const std::int64_t now = steady_now_us();
+        const FrameInfo& f = h264_info_;
+        video_stats().shown(
+            {.layer = "desk",
+             .stream = 0,
+             .seq = f.seq,
+             .codec = "h264",
+             .bytes = f.bytes,
+             .width = layout_.desk_w,
+             .height = layout_.desk_h,
+             .latency_us = f.t_capture_local_us ? std::optional(now - *f.t_capture_local_us) : std::nullopt,
+             .decode_us = f.decode_us,
+             .present_us = f.decoded_at_us ? now - f.decoded_at_us : 0});
+    }
+    if (!visible_ || changed || raise_owner) apply_z();
 }
 
 void DeskView::compose(const std::vector<Placed>& placed, const RECT& dirty) {

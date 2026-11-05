@@ -3,12 +3,13 @@
 # Loopback video baseline (roadmap P2.1, docs/PERF.md): the real kvm_host and kvm_client on 127.0.0.1,
 # one content window at a time, kvm_client's --stats for each. Both sides run on this one PC, so the
 # numbers include both PCs' CPU work on one CPU.
-#   -Mode desk    desk mode: the window is moved onto the virtual display (JPEG, P2.1).
+#   -Mode desk    desk mode: the window is moved onto the virtual display. -Codec jpeg: a JPEG per
+#                 window (P2.1); h264: one H.264 stream of the whole virtual display (P2.7).
 #   -Mode viewer  the window viewer: the window is sent the way Ctrl+Alt+Shift+W sends it (the
 #                 "share <hwnd>" command on kvm_host's stdin, so an installed Sarke holding the hotkey
 #                 doesn't matter), as -Codec jpeg or h264 (kvm_host --codec, roadmap P2.4c).
 #
-#   powershell -ExecutionPolicy Bypass -File tools\baseline_loopback.ps1 [-Seconds 30] [-Mode viewer -Codec h264]
+#   powershell -ExecutionPolicy Bypass -File tools\baseline_loopback.ps1 [-Seconds 30] [-Mode desk|viewer] [-Codec jpeg|h264]
 #
 # Needs: a build (cmake --build --preset x64-release), the Virtual Display Driver, Microsoft Edge, and
 # hands off the PC for about 3 minutes: it opens Notepad and two Edge windows (a throwaway profile)
